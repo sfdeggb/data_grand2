@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 -- 选择热门视频
 select video_id, count(*) as watch_count
 from watch_history
@@ -58,3 +59,7 @@ group by category_id
 order by watch_count desc
 limit 10;
 
+=======
+-- 现在有四个表分别是：短视频属性表 曝光表 用户画像表  
+-- 热门视频（视频播放次数排序）
+>>>>>>> 1365ffebaf30cdb251c7dd41657efa08336b35ae
