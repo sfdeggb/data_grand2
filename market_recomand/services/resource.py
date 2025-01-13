@@ -9,8 +9,9 @@ import numpy as np
 from flask import request, current_app
 from flask.views import MethodView
 from flask.blueprints import Blueprint
+from tqdm import tqdm
 
-
+from .config import *
 from .config import *
 
 class MarketRecommendView(MethodView):
@@ -58,84 +59,120 @@ class MarketRecommendView(MethodView):
 
         return sequence + (pad_value * (length - len(sequence))) if len(sequence) < length else sequence
     
-    def _get_cross_feature(self,df,user_id='mobile',item_id='skuid', sequence_type='view', cycle=7):
-        """计算用户-商品交叉特征
-        
-        Args:
-            df (pd.DataFrame): 输入数据集
-            user_id (str): 用户ID列名
-            item_id (str): 商品ID列名 
-            sequence_type (str): 行为类型 - 'view'/'click'/'purchase'
-            cycle (int): 统计周期 - 7/14/30/60天
+    def _get_cross_feature(self,df, user_id='mobile', item_id='skuid', sequence_type='view', cycle=7, batch_size=10000):
+        """计算用户-商品交叉特征的优化版本
         """
         # 获取对应的行为序列列名
         seq_col_map = {
-            'view': 'user_view_seq',
-            'click': 'user_clk_seq', 
-            'purchase': 'user_purchase_seq'
+            'view': 'qysc_view_seq',
+            'click': 'qysc_clk_seq',
+            'purchase': 'qysc_order_seq'
         }
         sequence_col = seq_col_map[sequence_type]
-        
-        def process_sequence(row, days):
-            """处理单条记录的行为序列"""
-            current_item = row[item_id]
-            sequences = eval(row[sequence_col]) # 将字符串转为列表
-            
-            # 获取当前时间戳
-            #current_time = pd.Timestamp.now()
-            #current_time = pd.Timestamp(row['static_date'])
-            current_time = pd.Timestamp('20241205')
-            # 过滤指定天数内的记录
-            filtered_seq = [
-                s for s in sequences 
-                if (current_time - pd.Timestamp(s['oper_time'])).days <= days
-            ]
-            
-            # 计算商品ID维度统计
-            item_count = sum(1 for s in filtered_seq if s['sku_id'] == current_item)
-            
-            # 计算一级类目维度统计
-            type1_count = sum(1 for s in filtered_seq 
-                            if s['frist_order_type'] == row['goods_class_name'])
-            
-            # 计算二级类目维度统计
-            type2_count = sum(1 for s in filtered_seq 
-                            if s['second_order_type'] == row['class_name'])
-            
-            return pd.Series({
-                f'u2i_{days}days_{sequence_type}_count': item_count,
-                f'u2i_type1_{days}days_{sequence_type}_count': type1_count,
-                f'u2i_type2_{days}days_{sequence_type}_count': type2_count
-            })
-        
-        # 计算不同时间窗口的特征
+
+        def process_batch(batch_df):
+            """处理单个批次的数据"""
+            # current_time = pd.Timestamp('20241205')
+
+            # 将序列字符串转换为列表（批量处理）
+            sequences = batch_df[sequence_col].fillna('[]').apply(eval)
+
+            # 预分配结果数组
+            result_arrays = {
+                f'u2i_{cycle}days_{sequence_type}_count': np.zeros(len(batch_df)),
+                f'u2i_type1_{cycle}days_{sequence_type}_count': np.zeros(len(batch_df)),
+                f'u2i_type2_{cycle}days_{sequence_type}_count': np.zeros(len(batch_df))
+            }
+
+            # 向量化处理序列
+            for idx, (seq, current_time, current_item, type1, type2) in enumerate(zip(
+                sequences,
+                batch_df['statis_date'],
+                batch_df[item_id],
+                batch_df['goods_class_name'],
+                batch_df['class_name']
+            )):
+                current_time = pd.Timestamp(current_time)
+                try:
+                    # 过滤时间范围内的记录
+                    filtered_seq = [
+                        s for s in seq 
+                        if (current_time - pd.Timestamp(s['oper_time'])).days <= cycle
+                    ]
+                except Exception as e:
+                    print(f"Error processing sequence for row {idx}: {e}")
+                    filtered_seq = []
+                # print(filtered_seq)
+                if filtered_seq:
+                    # 使用numpy数组操作进行统计
+                    seq_array = np.array([
+                        (s['sku_id'], s['first_class_name'], s['second_class_name'])
+                        for s in filtered_seq
+                    ], dtype=object)
+                    result_arrays[f'u2i_{cycle}days_{sequence_type}_count'][idx] = np.sum(seq_array[:, 0] == current_item)
+                    result_arrays[f'u2i_type1_{cycle}days_{sequence_type}_count'][idx] = np.sum(seq_array[:, 1] == type1)
+                    result_arrays[f'u2i_type2_{cycle}days_{sequence_type}_count'][idx] = np.sum(seq_array[:, 2] == type2)
+                else:
+                    result_arrays[f'u2i_{cycle}days_{sequence_type}_count'][idx] = 0
+                    result_arrays[f'u2i_type1_{cycle}days_{sequence_type}_count'][idx] = 0
+                    result_arrays[f'u2i_type2_{cycle}days_{sequence_type}_count'][idx] = 0
+                    return pd.DataFrame(result_arrays)
+                # 批量处理数据
+        result_dfs = []
+
+        for start_idx in tqdm(range(0, len(df), batch_size), desc=f"处理 {sequence_type} 特征"):
+            end_idx = min(start_idx + batch_size, len(df))
+            batch_df = df.iloc[start_idx:end_idx]
+            result_df = process_batch(batch_df)
+            result_dfs.append(result_df)
+
+        # 合并结果
+        final_result = pd.concat(result_dfs, axis=0)
+        final_result.index = df.index
+        res = pd.concat([df, final_result], axis=1)
+        return res
+    
+    def _process_features(self,df, cycle=7, batch_size=10000):
+        """处理所有类型的交叉特征"""
         result_df = df.copy()
-        
-        # 对于点击行为额外计算1天的实时特征
-        if sequence_type == 'click':
-            result_df = pd.concat([
+
+        # 使用tqdm显示总体进度
+        with tqdm(total=1, desc="处理批次...") as pbar:
+            # 处理各类行为特征
+            for sequence_type in ['view', 'click', 'purchase']:
+                result_df = self._get_cross_feature(
+                    result_df,
+                    sequence_type=sequence_type,
+                    batch_size=batch_size,
+                    cycle=cycle
+                )
+            pbar.update(1)
+
+        return result_df
+    
+    def _process_real_time_features(self,df, cycle=1, batch_size=10000):
+        """处理所有类型的交叉特征"""
+        result_df = df.copy()
+        # 使用tqdm显示总体进度
+        with tqdm(total=1, desc="处理批次...") as pbar:
+            
+            result_df = self._get_cross_feature(
                 result_df,
-                df.apply(lambda x: process_sequence(x, 1), axis=1)
-            ], axis=1)
-        
-        # 计算常规时间窗口的特征
-        for days in [7, 14, 30, 60]:
-            result_df = pd.concat([
-                result_df,
-                df.apply(lambda x: process_sequence(x, days), axis=1)
-            ], axis=1)
-        
+                sequence_type='click',
+                batch_size=batch_size,
+                cycle=cycle
+            )
+            pbar.update(1)
+
         return result_df
     
     def _process_all_features(self,df):
-        """处理所有类型的交叉特征"""
-        # 处理浏览行为特征
-        df = self._get_cross_feature(df, sequence_type='view')
-        # 处理点击行为特征
-        df = self._get_cross_feature(df, sequence_type='click')
-        # 处理购买行为特征
-        df = self._get_cross_feature(df, sequence_type='purchase')
-        return df 
+        data = self._process_features(df,cycle=7,batch_size=10)
+        data = self._process_features(data,cycle=14,batch_size=10)
+        data = self._process_features(data,cycle=30,batch_size=10)
+        data = self._process_features(data,cycle=60,batch_size=10)
+        data = self._process_real_time_features(data,cycle=1,batch_size=10)
+        return data
     
     def post(self):
         """
@@ -199,9 +236,9 @@ class MarketRecommendView(MethodView):
         # 特征处理
         items_features = [item['rawFeatures'] for item in items]
         df = pd.DataFrame(items_features)
-        df['user_view_seq'] = [view_seq] * len(df)
-        df['user_clk_seq'] = [click_seq] * len(df)
-        df['user_buy_seq'] = [buy_seq] * len(df)
+        df['qysc_view_seq'] = [view_seq] * len(df)
+        df['qysc_clk_seq'] = [click_seq] * len(df)
+        df['qysc_order_seq'] = [buy_seq] * len(df)
 
         df = self._process_all_features(df)
 
