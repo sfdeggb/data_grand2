@@ -21,6 +21,52 @@ def get_cross_feature(df, user_id='mobile', item_id='skuid', sequence_type='view
     }
     sequence_col = seq_col_map[sequence_type]
     
+    # 检查序列是否都相同
+    first_seq = df[sequence_col].iloc[0]
+    if df[sequence_col].eq(first_seq).all():
+        # 所有序列都相同，只需计算一次
+        #sequence=[{},{},{},{}]
+        sequence = eval(first_seq)
+        
+        # 预分配结果数组
+        result_arrays = {
+            f'u2i_{cycle}days_{sequence_type}_count': np.zeros(len(df)),
+            f'u2i_type1_{cycle}days_{sequence_type}_count': np.zeros(len(df)),
+            f'u2i_type2_{cycle}days_{sequence_type}_count': np.zeros(len(df))
+        }
+        
+        # 对每个时间点和商品进行向量化计算
+        for idx, (current_time, current_item, type1, type2) in enumerate(zip(
+            df['statis_date'],
+            df[item_id],
+            df['goods_class_name'],
+            df['class_name']
+        )):
+            current_time = pd.Timestamp(current_time)
+            try:
+                # 过滤时间范围内的记录
+                filtered_seq = [
+                    s for s in sequence 
+                    if (current_time - pd.Timestamp(s['oper_time'])).days <= cycle
+                ]
+                
+                if filtered_seq:
+                    seq_array = np.array([
+                        (s['sku_id'], s['frist_class_name'], s['second_class_name'])
+                        for s in filtered_seq
+                    ], dtype=object)
+                    
+                    result_arrays[f'u2i_{cycle}days_{sequence_type}_count'][idx] = np.sum(seq_array[:, 0] == current_item)
+                    result_arrays[f'u2i_type1_{cycle}days_{sequence_type}_count'][idx] = np.sum(seq_array[:, 1] == type1)
+                    result_arrays[f'u2i_type2_{cycle}days_{sequence_type}_count'][idx] = np.sum(seq_array[:, 2] == type2)
+            except Exception as e:
+                print(f"Error processing sequence for row {idx}: {e}")
+                
+        result_df = pd.DataFrame(result_arrays)
+        result_df.index = df.index
+        return pd.concat([df, result_df], axis=1)
+    
+    # 如果序列不都相同，使用原来的批处理逻辑
     def process_batch(batch_df):
         """处理单个批次的数据"""
         #current_time = pd.Timestamp('20241205')
@@ -125,41 +171,41 @@ def generate_sample_data():
     # 用户行为序列（示例）
     'qysc_view_seq': [
         '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"果汁"}]',
-        '[{"sku_id":"1002","oper_time":"20241201","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"果汁"}]',
-        '[{"sku_id":"1003","oper_time":"20241202","is_add_buy":"1","frist_class_name":"零食","second_class_name":"薯片"}]',
-        '[{"sku_id":"1004","oper_time":"20241202","is_add_buy":"0","frist_class_name":"食品","second_class_name":"豆腐干"}]',
-        '[{"sku_id":"1005","oper_time":"20241203","is_add_buy":"1","frist_class_name":"饮料","second_class_name":"茶饮"}]',
-        '[{"sku_id":"1006","oper_time":"20241203","is_add_buy":"0","frist_class_name":"零食","second_class_name":"糖果"}]',
-        '[{"sku_id":"1007","oper_time":"20241204","is_add_buy":"1","frist_class_name":"食品","second_class_name":"方便面"}]',
-        '[{"sku_id":"1008","oper_time":"20241204","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"碳酸饮料"}]',
-        '[{"sku_id":"1009","oper_time":"20241205","is_add_buy":"1","frist_class_name":"零食","second_class_name":"饼干"}]',
-        '[{"sku_id":"1010","oper_time":"20241205","is_add_buy":"0","frist_class_name":"食品","second_class_name":"肉脯"}]'
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"果汁"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"果汁"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"果汁"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"果汁"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"果汁"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"果汁"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"果汁"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"果汁"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"果汁"}]'
     ],
     
     'qysc_clk_seq': [
         '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
-        '[{"sku_id":"1002","oper_time":"20241201","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"果汁"}]',
-        '[{"sku_id":"1003","oper_time":"20241202","is_add_buy":"1","frist_class_name":"零食","second_class_name":"薯片"}]',
-        '[{"sku_id":"1004","oper_time":"20241202","is_add_buy":"0","frist_class_name":"食品","second_class_name":"豆腐干"}]',
-        '[{"sku_id":"1005","oper_time":"20241203","is_add_buy":"1","frist_class_name":"饮料","second_class_name":"茶饮"}]',
-        '[{"sku_id":"1006","oper_time":"20241203","is_add_buy":"0","frist_class_name":"零食","second_class_name":"糖果"}]',
-        '[{"sku_id":"1007","oper_time":"20241204","is_add_buy":"1","frist_class_name":"食品","second_class_name":"方便面"}]',
-        '[{"sku_id":"1008","oper_time":"20241204","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"碳酸饮料"}]',
-        '[{"sku_id":"1009","oper_time":"20241205","is_add_buy":"1","frist_class_name":"零食","second_class_name":"饼干"}]',
-        '[{"sku_id":"1010","oper_time":"20241205","is_add_buy":"0","frist_class_name":"食品","second_class_name":"肉脯"}]'
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]'
     ],
     
     'qysc_order_seq': [
         '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
-        '[{"sku_id":"1002","oper_time":"20241201","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"果汁"}]',
-        '[{"sku_id":"1003","oper_time":"20241202","is_add_buy":"1","frist_class_name":"零食","second_class_name":"薯片"}]',
-        '[{"sku_id":"1004","oper_time":"20241202","is_add_buy":"0","frist_class_name":"食品","second_class_name":"豆腐干"}]',
-        '[{"sku_id":"1005","oper_time":"20241203","is_add_buy":"1","frist_class_name":"饮料","second_class_name":"茶饮"}]',
-        '[{"sku_id":"1006","oper_time":"20241203","is_add_buy":"0","frist_class_name":"零食","second_class_name":"糖果"}]',
-        '[{"sku_id":"1007","oper_time":"20241204","is_add_buy":"1","frist_class_name":"食品","second_class_name":"方便面"}]',
-        '[{"sku_id":"1008","oper_time":"20241204","is_add_buy":"0","frist_class_name":"饮料","second_class_name":"碳酸饮料"}]',
-        '[{"sku_id":"1009","oper_time":"20241205","is_add_buy":"1","frist_class_name":"零食","second_class_name":"饼干"}]',
-        '[{"sku_id":"1010","oper_time":"20241205","is_add_buy":"0","frist_class_name":"食品","second_class_name":"肉脯"}]'
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]',
+        '[{"sku_id":"1001","oper_time":"20241201","is_add_buy":"1","frist_class_name":"食品","second_class_name":"速溶咖啡"}]'
     ]
 })
 
